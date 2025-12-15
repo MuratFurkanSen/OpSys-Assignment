@@ -19,7 +19,7 @@ int sample_count = 0;
 int feature_count = 0;
 int expanded_feature_count = 0;
 int target_col_index = -1;
-char *END_OF_FILE = "\r\n";
+char *END_OF_LINE = "\r\n";
 
 /* ================== DATA STORAGE ================== */
 char line_buffer[MAX_FEATURES*STR_LEN];
@@ -33,8 +33,8 @@ double X_norm_min[MAX_FEATURES];
 double X_norm_max[MAX_FEATURES];
 
 double y_norm[MAX_FEATURES];
-double y_norm_min[MAX_FEATURES];
-double y_norm_max[MAX_FEATURES];
+double y_norm_min;
+double y_norm_max;
 
 double X_norm_transpose[MAX_FEATURES][MAX_SAMPLES];
 
@@ -44,6 +44,7 @@ double XT_y_norm[MAX_FEATURES];
 double XT_X_inverse[MAX_SAMPLES][MAX_SAMPLES];
 double beta[MAX_FEATURES];
 
+double user_input[MAX_FEATURES];
 
 
 /* ================== DATASETS ================== */
@@ -72,6 +73,10 @@ void compute_XTX(double A[][MAX_SAMPLES], double B[][MAX_FEATURES], double C[][M
 void compute_XTY(double X_T[][MAX_SAMPLES], double y[], double XTY[], int cols, int rows);
 int invert_matrix(double A[][MAX_SAMPLES], double A_inv[][MAX_SAMPLES], int n);
 void compute_beta(double XTX_inv[][MAX_SAMPLES], double XTY[], double beta[], int cols);
+
+void ask_user_parameters();
+double predict();
+double denormalize_target(double normalized_val);
 
 int is_double(const char *str);
 
@@ -117,14 +122,16 @@ int main(void) {
     // Assuming XTX_inv and XTY are already computed
     compute_beta(XT_X_inverse, XT_y_norm, beta, cols);
 
-    // Print coefficients
-    printf("Regression coefficients (beta):\n");
-    for (int i = 0; i < cols; i++) {
-        printf("beta[%d] = %g\n", i, beta[i]);
-    }
+    // First one is intercept(bias)
+    user_input[0] = 1;
+    // Get the Rest of the Input
+    ask_user_parameters();
+    double prediction = predict();
+    
+    printf("Normalized Prediction Result %g\n", prediction);
+    printf("Normalized Prediction Result %g\n", denormalize_target(prediction));
 
     return 0;
-
 }
 
 // ================== FILE OPERATIONS FUNCTIONS ==================
@@ -146,7 +153,7 @@ void parse_csv_file(FILE *fp) {
 
     // Fill Header Names and Count Feature Size
     fgets(line_buffer, sizeof(line_buffer), fp);
-    line_buffer[strcspn(line_buffer, END_OF_FILE)] = '\0';
+    line_buffer[strcspn(line_buffer, END_OF_LINE)] = '\0';
 
     token = strtok(line_buffer, ",");
     while (token != NULL){
@@ -159,7 +166,7 @@ void parse_csv_file(FILE *fp) {
 
     // Fill First Row and Also Determine Column Types
     fgets(line_buffer, sizeof(line_buffer), fp);
-    line_buffer[strcspn(line_buffer, END_OF_FILE)] = '\0';
+    line_buffer[strcspn(line_buffer, END_OF_LINE)] = '\0';
 
 
     token = strtok(line_buffer, ",");
@@ -180,7 +187,7 @@ void parse_csv_file(FILE *fp) {
     
     // Fill Rest of the Columns
     while (fgets(line_buffer, sizeof(line_buffer), fp)) {
-        line_buffer[strcspn(line_buffer, END_OF_FILE)] = '\0';
+        line_buffer[strcspn(line_buffer, END_OF_LINE)] = '\0';
         token = strtok(line_buffer,",");
 
         while (token != NULL){
@@ -300,8 +307,8 @@ int normalize_target_column(int raw_col_index){
             max = raw_numeric[r][raw_col_index];
         }
     }
-    y_norm_min[norm_col_index] = min;
-    y_norm_max[norm_col_index] = max;
+    y_norm_min = min;
+    y_norm_max = max;
     
     double range = max - min;
     if (range == 0){
@@ -407,7 +414,89 @@ void compute_beta(double XTX_inv[][MAX_SAMPLES], double XTY[], double beta[], in
     }
 }
 
+// ================== PREDICTION FUNCTIONS ==================
+void ask_user_parameters() {
+    char input[STR_LEN];
+    
+    
+    for (int c = 0; c < feature_count - 1; c++) { // Exclude target
+        // 0 is Reserved for Intercept(Bias)
+        int norm_col_index = c+1;
+        while (1) {
+            printf("Enter value for %s: ", column_names[c]);
+            if (!fgets(input, sizeof(input), stdin)) {
+                printf("Error reading input. Try again.\n");
+                continue;
+            }
 
+            // Remove newline
+            input[strcspn(input, END_OF_LINE)] = '\0';
+
+            if (is_numeric[c] == 1) {
+                char *endptr;
+                double val = strtod(input, &endptr);
+                if (*endptr != '\0' || input[0] == '\0') {
+                    printf("Invalid numeric value. Please try again.\n");
+                    continue;
+                }
+                double range = X_norm_max[norm_col_index]- X_norm_min[norm_col_index];
+                if (range == 0){
+                    range = 1;
+                }
+                user_input[norm_col_index] = (val-X_norm_min[norm_col_index])/range;
+            } else {
+                if (strlen(input) == 0) {
+                    printf("Invalid categorical value. Please try again.\n");
+                    continue;
+                }
+
+                if (strcasecmp(column_names[c], "furnishingstatus") == 0){
+                    char *value = input;
+
+                    if (strcasecmp(value, "furnished") == 0) {
+                        user_input[norm_col_index]= 2;
+                    } else if (strcasecmp(value, "semi-furnished") == 0) {
+                        user_input[norm_col_index]= 1;
+                    } else if (strcasecmp(value, "unfurnished") == 0) {
+                        user_input[norm_col_index]= 0;
+                    } else { // Unknown Value
+                        user_input[norm_col_index]= -1;
+                    }
+                
+                } else{
+                    char *value = input;
+
+                    if (strcasecmp(value, "yes") == 0) {
+                        user_input[norm_col_index]= 1;
+                    } else if (strcasecmp(value, "no") == 0) {
+                        user_input[norm_col_index]= 0;
+                    } else { // Unknown Value
+                        user_input[norm_col_index]= -1;
+                    }
+                }
+                if (user_input[norm_col_index] == -1){
+                    printf("Invalid categorical value. Please try again.\n");
+                    continue;   
+                }
+            }        
+            break; // Valid input, go to next feature
+        }
+    }
+}
+
+double predict() {
+    double result = 0.0;
+    for (int i = 0; i < feature_count; i++) {
+        result += beta[i] * user_input[i];
+    }
+    return result;
+}
+
+double denormalize_target(double normalized_val) {
+    double range = y_norm_max - y_norm_min;
+    if (range == 0) range = 1;  // avoid division by zero
+    return normalized_val * range + y_norm_min;
+}
 
 // ================== HELPER FUNCTIONS ==================
 
