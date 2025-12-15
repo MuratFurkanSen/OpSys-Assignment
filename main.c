@@ -28,11 +28,15 @@ char *raw_categorical[MAX_SAMPLES][MAX_FEATURES];
 double raw_numeric[MAX_SAMPLES][MAX_FEATURES];
 int is_numeric[MAX_FEATURES];
 
-
 double X_norm[MAX_SAMPLES][MAX_FEATURES];
 double X_norm_min[MAX_FEATURES];
 double X_norm_max[MAX_FEATURES];
-double y_norm[MAX_SAMPLES];
+
+double y_norm[MAX_FEATURES];
+double y_norm_min[MAX_FEATURES];
+double y_norm_max[MAX_FEATURES];
+
+double X_norm_transform[MAX_FEATURES][MAX_SAMPLES];
 
 
 
@@ -45,42 +49,56 @@ const char *DATASETS[] = {
     "multiple_linear_regression_dataset.csv"
 };
 
-int check_file_existence(void);
 
-int is_double(const char *str);
+
+// Main Function Prototypes
+int check_file_existence(void);
 void parse_csv_file(FILE *fp);
+int normalize_numeric_column(int col_index);
+void normalize_categorical_column(int col_index);
+
+// Helper Function Prototypes
+int is_double(const char *str);
 
 int main(void) {
-
-    if (check_file_existence() != NULL){
-        printf("File '%s' is missing", check_file_existence())
-    }
-    const char *filename = "multiple_linear_regression_dataset.csv";
+    const char *filename = DATASETS[2];
     FILE *fp = fopen(filename, "r");
-
     if (!fp) {
         perror(filename);
         return EXIT_FAILURE;
     }
 
+    // 1) Parse CSV
     parse_csv_file(fp);
-
     fclose(fp);
 
-    // Print results
-    printf("Columns: %d, Samples: %d\n", feature_count, sample_count);
-    for (int i = 0; i < feature_count; i++) {
-        printf("Column %d: %s (%s)\n", i, column_names[i], 
-               is_numeric[i] ? "numeric" : "categorical");
+    // 2) Normalize numeric columns
+    for (int c = 0; c < feature_count; c++) {
+        if (is_numeric[c]) {
+            int status = normalize_numeric_column(c);
+            if (status == -1) {
+                printf("Warning: column %s has identical values, skipping normalization\n", column_names[c]);
+            }
+        }
     }
 
+    // 3) Encode categorical columns
+    for (int c = 0; c < feature_count; c++) {
+        if (!is_numeric[c]) {
+            normalize_categorical_column(c);
+        }
+    }
+
+    // 4) Print results
+    printf("Columns: %d, Samples: %d\n\n", feature_count, sample_count);
     for (int r = 0; r < sample_count; r++) {
         printf("Row %d: ", r);
         for (int c = 0; c < feature_count; c++) {
-            if (is_numeric[c])
-                printf("%g ", raw_numeric[r][c]);
-            else
-                printf("%s ", raw_categorical[r][c]);
+            if (is_numeric[c]) {
+                printf("%g - ", X_norm[r][c]);
+            } else {
+                printf("%g - ", X_norm[r][c]); // categorical encoded in X_norm
+            }
         }
         printf("\n");
     }
@@ -89,6 +107,7 @@ int main(void) {
 }
 
 
+// ================== FILE OPERATIONS FUNCTIONS ==================
 void parse_csv_file(FILE *fp) {
     // Local Varaibles
     char *token;
@@ -148,63 +167,6 @@ void parse_csv_file(FILE *fp) {
     }
 }
 
-// ================== NORMALIZER FUNCTIONS ==================
-int normalize_numeric_column(int col_index){
-    double min = raw_numeric[0][col_index];
-    double max = raw_numeric[0][col_index];
-
-    for (int r = 0; r < sample_count; r++) {
-        if (raw_numeric[r][col_index] < min){
-             min = raw_numeric[r][col_index];
-        }
-        if (raw_numeric[r][col_index] > max){
-            max = raw_numeric[r][col_index];
-        }
-    }
-    X_norm_min[col_index] = min;
-    X_norm_max[col_index] = max;
-    
-    double range = max - min;
-    if (range == 0){
-        return -1;
-    }
-    for (int r = 0; r < sample_count; r++) {
-        X_norm[r][col_index] = (raw_numeric[r][col_index] - min) / range;
-    }   
-    return 0;
-}
-
-void normalize_categorical_column(int col_index){
-    if (strcasecmp(column_names[col_index], "furnishingstatus") == 0){
-        for (int r = 0; r < sample_count; r++) {
-            char *value = raw_categorical[r][col_index];
-
-            if (strcasecmp(value, "furnished") == 0) {
-                X_norm[r][col_index] = 2;
-            } else if (strcasecmp(value, "semi-furnished") == 0) {
-                X_norm[r][col_index] = 1;
-            } else if (strcasecmp(value, "unfurnished") == 0) {
-                X_norm[r][col_index] = 0;
-            } else { // Unknown Value
-                X_norm[r][col_index] = -1;
-            }
-        }
-    } else{
-        for (int r = 0; r < sample_count; r++) {
-            char *value = raw_categorical[r][col_index];
-
-            if (strcasecmp(value, "yes") == 0) {
-                X_norm[r][col_index] = 1;
-            } else if (strcasecmp(value, "no") == 0) {
-                X_norm[r][col_index] = 0;
-            } else { // Unknown Value
-                X_norm[r][col_index] = -1;
-            }
-        }
-    }
-}
-
-// ================== HELPER FUNCTIONS ==================
 int check_file_existence(void) {
     for (int i = 0; i < DATASET_COUNT; i++) {
         if (!(access(DATASETS[i], F_OK) == 0)) {
@@ -213,6 +175,113 @@ int check_file_existence(void) {
     }
     return 0;
 }
+// ================== NORMALIZER FUNCTIONS ==================
+
+int fill_intercepsts_column(int col_index){
+    for (int r = 0; r < sample_count; r++) {
+        X_norm[r][col_index] = 1;
+    }
+    return 0;
+}
+
+int normalize_numeric_column(int raw_col_index){
+    int norm_col_index = raw_col_index + 1;
+
+    double min = raw_numeric[0][raw_col_index];
+    double max = raw_numeric[0][raw_col_index];
+
+    for (int r = 0; r < sample_count; r++) {
+        if (raw_numeric[r][raw_col_index] < min){
+             min = raw_numeric[r][raw_col_index];
+        }
+        if (raw_numeric[r][raw_col_index] > max){
+            max = raw_numeric[r][raw_col_index];
+        }
+    }
+    X_norm_min[norm_col_index] = min;
+    X_norm_max[norm_col_index] = max;
+    
+    double range = max - min;
+    if (range == 0){
+        range = 1;
+    }
+    for (int r = 0; r < sample_count; r++) {
+        X_norm[r][norm_col_index] = (raw_numeric[r][raw_col_index] - min) / range;
+    }
+    return 0;
+}
+
+void normalize_categorical_column(int raw_col_index){
+    int norm_col_index = raw_col_index + 1;
+
+    if (strcasecmp(column_names[raw_col_index], "furnishingstatus") == 0){
+        for (int r = 0; r < sample_count; r++) {
+            char *value = raw_categorical[r][raw_col_index];
+
+            if (strcasecmp(value, "furnished") == 0) {
+                X_norm[r][norm_col_index] = 2;
+            } else if (strcasecmp(value, "semi-furnished") == 0) {
+                X_norm[r][norm_col_index] = 1;
+            } else if (strcasecmp(value, "unfurnished") == 0) {
+                X_norm[r][norm_col_index] = 0;
+            } else { // Unknown Value
+                X_norm[r][norm_col_index] = -1;
+            }
+        }
+    } else{
+        for (int r = 0; r < sample_count; r++) {
+            char *value = raw_categorical[r][raw_col_index];
+
+            if (strcasecmp(value, "yes") == 0) {
+                X_norm[r][norm_col_index] = 1;
+            } else if (strcasecmp(value, "no") == 0) {
+                X_norm[r][norm_col_index] = 0;
+            } else { // Unknown Value
+                X_norm[r][norm_col_index] = -1;
+            }
+        }
+    }
+    return 0;
+}
+
+int normalize_target_column(int raw_col_index){
+    int norm_col_index = raw_col_index + 1;
+
+    double min = raw_numeric[0][raw_col_index];
+    double max = raw_numeric[0][raw_col_index];
+
+    for (int r = 0; r < sample_count; r++) {
+        if (raw_numeric[r][raw_col_index] < min){
+             min = raw_numeric[r][raw_col_index];
+        }
+        if (raw_numeric[r][raw_col_index] > max){
+            max = raw_numeric[r][raw_col_index];
+        }
+    }
+    y_norm_min[norm_col_index] = min;
+    y_norm_max[norm_col_index] = max;
+    
+    double range = max - min;
+    if (range == 0){
+        range = 1;
+    }
+    for (int r = 0; r < sample_count; r++) {
+        y_norm[r] = (raw_numeric[r][raw_col_index] - min) / range;
+    }
+    return 0;
+}
+
+
+// ================== MATRIX OPERATIONS FUNCTIONS ==================
+void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES], int rows, int cols) {
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            output[c][r] = input[r][c];
+        }
+    }
+}
+
+// ================== HELPER FUNCTIONS ==================
 
 // Returns 1 when true, 0 otherwise.
 int is_double(const char *str) {
