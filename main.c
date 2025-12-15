@@ -54,60 +54,83 @@ const char *DATASETS[] = {
 // Main Function Prototypes
 int check_file_existence(void);
 void parse_csv_file(FILE *fp);
-int normalize_numeric_column(int col_index);
-void normalize_categorical_column(int col_index);
+
+int normalize_data();
+int fill_intercepsts_column(int norm_col_index);
+int normalize_numeric_column(int raw_col_index);
+int normalize_categorical_column(int raw_col_index);
+int normalize_target_column(int raw_col_index);
+
+void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES], int rows, int cols);
 
 // Helper Function Prototypes
 int is_double(const char *str);
 
+
+#define ROWS 3
+#define COLS 2
 int main(void) {
     const char *filename = DATASETS[2];
+
+    // 1) Check file
+    if (check_file_existence() == -1) {
+        printf("Error: One or more dataset files are missing!\n");
+        return EXIT_FAILURE;
+    }
+
+    // 2) Open file and parse CSV
     FILE *fp = fopen(filename, "r");
     if (!fp) {
         perror(filename);
         return EXIT_FAILURE;
     }
-
-    // 1) Parse CSV
     parse_csv_file(fp);
     fclose(fp);
 
-    // 2) Normalize numeric columns
-    for (int c = 0; c < feature_count; c++) {
-        if (is_numeric[c]) {
-            int status = normalize_numeric_column(c);
-            if (status == -1) {
-                printf("Warning: column %s has identical values, skipping normalization\n", column_names[c]);
-            }
-        }
-    }
+    // 3) Normalize data (intercept + numeric + categorical + target)
+    normalize_data();
 
-    // 3) Encode categorical columns
-    for (int c = 0; c < feature_count; c++) {
-        if (!is_numeric[c]) {
-            normalize_categorical_column(c);
-        }
-    }
+    // 4) Transpose the design matrix X_norm
+    transpose_matrix(X_norm, X_norm_transform, sample_count, feature_count); 
+    // +1 because first column is intercept
 
-    // 4) Print results
-    printf("Columns: %d, Samples: %d\n\n", feature_count, sample_count);
+    // 5) Print X_norm and X_norm_transform to verify transpose
+    printf("X_norm (original, %d x %d):\n", sample_count, feature_count);
     for (int r = 0; r < sample_count; r++) {
-        printf("Row %d: ", r);
-        for (int c = 0; c < feature_count; c++) {
-            if (is_numeric[c]) {
-                printf("%g - ", X_norm[r][c]);
-            } else {
-                printf("%g - ", X_norm[r][c]); // categorical encoded in X_norm
-            }
+        for (int c = 0; c < feature_count + 1; c++) {
+            printf("%g ", X_norm[r][c]);
         }
         printf("\n");
+    }
+
+    printf("\nX_norm_transform (transposed, %d x %d):\n", feature_count, sample_count);
+    for (int r = 0; r < feature_count; r++) {
+        for (int c = 0; c < sample_count; c++) {
+            printf("%g - ", X_norm_transform[r][c]);
+        }
+        printf("\n");
+    }
+
+    // 6) Print target vector
+    printf("\nY_norm (target):\n");
+    for (int r = 0; r < sample_count; r++) {
+        printf("%g\n", y_norm[r]);
     }
 
     return 0;
 }
 
-
 // ================== FILE OPERATIONS FUNCTIONS ==================
+
+int check_file_existence(void) {
+    for (int i = 0; i < DATASET_COUNT; i++) {
+        if (!(access(DATASETS[i], F_OK) == 0)) {
+          return -1;
+        } 
+    }
+    return 0;
+}
+
 void parse_csv_file(FILE *fp) {
     // Local Varaibles
     char *token;
@@ -166,20 +189,32 @@ void parse_csv_file(FILE *fp) {
         col_counter = 0;
     }
 }
-
-int check_file_existence(void) {
-    for (int i = 0; i < DATASET_COUNT; i++) {
-        if (!(access(DATASETS[i], F_OK) == 0)) {
-          return -1;
-        } 
-    }
-    return 0;
-}
 // ================== NORMALIZER FUNCTIONS ==================
+int normalize_data(){
+        // 2) Set intercept column as the first one
+    fill_intercepsts_column(0);
 
-int fill_intercepsts_column(int col_index){
+    // 3) Normalize numeric columns (shifted by +1 in X_norm)
+    for (int c = 0; c < feature_count; c++) {
+
+        // Target Column
+        if (c == feature_count -1){
+            normalize_target_column(c);
+            break;
+        }
+
+        // Feature Columns
+        if (is_numeric[c] == 1){
+            normalize_numeric_column(c);
+        } else{
+            normalize_categorical_column(c);
+        }
+    }
+}
+
+int fill_intercepsts_column(int norm_col_index){
     for (int r = 0; r < sample_count; r++) {
-        X_norm[r][col_index] = 1;
+        X_norm[r][norm_col_index] = 1;
     }
     return 0;
 }
@@ -211,7 +246,7 @@ int normalize_numeric_column(int raw_col_index){
     return 0;
 }
 
-void normalize_categorical_column(int raw_col_index){
+int normalize_categorical_column(int raw_col_index){
     int norm_col_index = raw_col_index + 1;
 
     if (strcasecmp(column_names[raw_col_index], "furnishingstatus") == 0){
