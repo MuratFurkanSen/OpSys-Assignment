@@ -36,7 +36,9 @@ double y_norm[MAX_FEATURES];
 double y_norm_min[MAX_FEATURES];
 double y_norm_max[MAX_FEATURES];
 
-double X_norm_transform[MAX_FEATURES][MAX_SAMPLES];
+double X_norm_transpose[MAX_FEATURES][MAX_SAMPLES];
+
+double XT_X_norm[MAX_SAMPLES][MAX_SAMPLES];
 
 
 
@@ -66,9 +68,6 @@ void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES]
 // Helper Function Prototypes
 int is_double(const char *str);
 
-
-#define ROWS 3
-#define COLS 2
 int main(void) {
     const char *filename = DATASETS[2];
 
@@ -90,34 +89,26 @@ int main(void) {
     // 3) Normalize data (intercept + numeric + categorical + target)
     normalize_data();
 
-    // 4) Transpose the design matrix X_norm
-    transpose_matrix(X_norm, X_norm_transform, sample_count, feature_count); 
-    // +1 because first column is intercept
+    int rows = sample_count;
+    int cols = feature_count + 1; // +1 for intercept column
 
-    // 5) Print X_norm and X_norm_transform to verify transpose
-    printf("X_norm (original, %d x %d):\n", sample_count, feature_count);
-    for (int r = 0; r < sample_count; r++) {
-        for (int c = 0; c < feature_count + 1; c++) {
-            printf("%g ", X_norm[r][c]);
+    // 2) Transpose
+    transpose_matrix(X_norm, X_norm_transpose, rows, cols);
+
+    // 3) Multiply X_T * X
+    matrix_multiply(X_norm_transpose, X_norm, XT_X_norm, cols, rows, cols);
+
+    // 4) Print XTX_norm
+    printf("X_norm^T * X_norm (%dx%d):\n", cols, cols);
+    for (int i = 0; i < cols; i++) {
+        for (int j = 0; j < cols; j++) {
+            printf("%g ", XT_X_norm[i][j]);
         }
         printf("\n");
-    }
-
-    printf("\nX_norm_transform (transposed, %d x %d):\n", feature_count, sample_count);
-    for (int r = 0; r < feature_count; r++) {
-        for (int c = 0; c < sample_count; c++) {
-            printf("%g - ", X_norm_transform[r][c]);
-        }
-        printf("\n");
-    }
-
-    // 6) Print target vector
-    printf("\nY_norm (target):\n");
-    for (int r = 0; r < sample_count; r++) {
-        printf("%g\n", y_norm[r]);
     }
 
     return 0;
+
 }
 
 // ================== FILE OPERATIONS FUNCTIONS ==================
@@ -312,6 +303,17 @@ void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES]
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < cols; c++) {
             output[c][r] = input[r][c];
+        }
+    }
+}
+
+void matrix_multiply(double A[][MAX_FEATURES], double B[][MAX_SAMPLES], double C[][MAX_SAMPLES], int rowsA, int colsA, int colsB) {
+    for (int i = 0; i < rowsA; i++) {
+        for (int j = 0; j < colsB; j++) {
+            C[i][j] = 0.0;
+            for (int k = 0; k < colsA; k++) {
+                C[i][j] += A[i][k] * B[k][j];
+            }
         }
     }
 }
