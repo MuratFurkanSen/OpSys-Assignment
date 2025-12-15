@@ -39,6 +39,10 @@ double y_norm_max[MAX_FEATURES];
 double X_norm_transpose[MAX_FEATURES][MAX_SAMPLES];
 
 double XT_X_norm[MAX_SAMPLES][MAX_SAMPLES];
+double XT_y_norm[MAX_FEATURES];
+
+double XT_X_inverse[MAX_SAMPLES][MAX_SAMPLES];
+double beta[MAX_FEATURES];
 
 
 
@@ -53,7 +57,7 @@ const char *DATASETS[] = {
 
 
 
-// Main Function Prototypes
+// Function Prototypes
 int check_file_existence(void);
 void parse_csv_file(FILE *fp);
 
@@ -64,8 +68,11 @@ int normalize_categorical_column(int raw_col_index);
 int normalize_target_column(int raw_col_index);
 
 void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES], int rows, int cols);
+void compute_XTX(double A[][MAX_SAMPLES], double B[][MAX_FEATURES], double C[][MAX_SAMPLES], int rowsA, int colsA, int colsB);
+void compute_XTY(double X_T[][MAX_SAMPLES], double y[], double XTY[], int cols, int rows);
+int invert_matrix(double A[][MAX_SAMPLES], double A_inv[][MAX_SAMPLES], int n);
+void compute_beta(double XTX_inv[][MAX_SAMPLES], double XTY[], double beta[], int cols);
 
-// Helper Function Prototypes
 int is_double(const char *str);
 
 int main(void) {
@@ -90,21 +97,30 @@ int main(void) {
     normalize_data();
 
     int rows = sample_count;
-    int cols = feature_count + 1; // +1 for intercept column
+    int cols = feature_count;
 
     // 2) Transpose
     transpose_matrix(X_norm, X_norm_transpose, rows, cols);
 
     // 3) Multiply X_T * X
-    matrix_multiply(X_norm_transpose, X_norm, XT_X_norm, cols, rows, cols);
+    compute_XTX(X_norm_transpose, X_norm, XT_X_norm, cols, rows, cols);
 
-    // 4) Print XTX_norm
-    printf("X_norm^T * X_norm (%dx%d):\n", cols, cols);
+
+    compute_XTY(X_norm_transpose, y_norm, XT_y_norm, cols, rows);
+
+    // 3) Invert XTX
+    if (invert_matrix(XT_X_norm, XT_X_inverse, cols) != 0) {
+        printf("Error: XTX is singular, cannot invert!\n");
+        return -1;
+    }
+
+    // Assuming XTX_inv and XTY are already computed
+    compute_beta(XT_X_inverse, XT_y_norm, beta, cols);
+
+    // Print coefficients
+    printf("Regression coefficients (beta):\n");
     for (int i = 0; i < cols; i++) {
-        for (int j = 0; j < cols; j++) {
-            printf("%g ", XT_X_norm[i][j]);
-        }
-        printf("\n");
+        printf("beta[%d] = %g\n", i, beta[i]);
     }
 
     return 0;
@@ -307,7 +323,7 @@ void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES]
     }
 }
 
-void matrix_multiply(double A[][MAX_FEATURES], double B[][MAX_SAMPLES], double C[][MAX_SAMPLES], int rowsA, int colsA, int colsB) {
+void compute_XTX(double A[][MAX_SAMPLES], double B[][MAX_FEATURES], double C[][MAX_SAMPLES], int rowsA, int colsA, int colsB) {
     for (int i = 0; i < rowsA; i++) {
         for (int j = 0; j < colsB; j++) {
             C[i][j] = 0.0;
@@ -317,6 +333,81 @@ void matrix_multiply(double A[][MAX_FEATURES], double B[][MAX_SAMPLES], double C
         }
     }
 }
+
+void compute_XTY(double X_T[][MAX_SAMPLES], double y[], double XTY[], int cols, int rows) {
+    for (int i = 0; i < cols; i++) {
+        XTY[i] = 0.0;
+        for (int j = 0; j < rows; j++) {
+            XTY[i] += X_T[i][j] * y[j];
+        }
+    }
+}
+
+int invert_matrix(double A[][MAX_SAMPLES], double A_inv[][MAX_SAMPLES], int n) {
+    // Initialize A_inv as identity matrix
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            A_inv[i][j] = (i == j) ? 1.0 : 0.0;
+        }
+    }
+
+    // Make a copy of A to work on
+    double temp[MAX_FEATURES][MAX_FEATURES];
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
+            temp[i][j] = A[i][j];
+
+    // Gauss-Jordan elimination
+    for (int i = 0; i < n; i++) {
+        // Find pivot
+        if (temp[i][i] == 0.0) {
+            // Try to swap with a lower row
+            int swap_row = -1;
+            for (int k = i + 1; k < n; k++) {
+                if (temp[k][i] != 0.0) {
+                    swap_row = k;
+                    break;
+                }
+            }
+            if (swap_row == -1) return -1; // Singular matrix
+            // Swap rows
+            for (int j = 0; j < n; j++) {
+                double t = temp[i][j]; temp[i][j] = temp[swap_row][j]; temp[swap_row][j] = t;
+                t = A_inv[i][j]; A_inv[i][j] = A_inv[swap_row][j]; A_inv[swap_row][j] = t;
+            }
+        }
+
+        // Normalize pivot row
+        double pivot = temp[i][i];
+        for (int j = 0; j < n; j++) {
+            temp[i][j] /= pivot;
+            A_inv[i][j] /= pivot;
+        }
+
+        // Eliminate other rows
+        for (int k = 0; k < n; k++) {
+            if (k == i) continue;
+            double factor = temp[k][i];
+            for (int j = 0; j < n; j++) {
+                temp[k][j] -= factor * temp[i][j];
+                A_inv[k][j] -= factor * A_inv[i][j];
+            }
+        }
+    }
+
+    return 0; // Success
+}
+
+void compute_beta(double XTX_inv[][MAX_SAMPLES], double XTY[], double beta[], int cols) {
+    for (int i = 0; i < cols; i++) {
+        beta[i] = 0.0;
+        for (int j = 0; j < cols; j++) {
+            beta[i] += XTX_inv[i][j] * XTY[j];
+        }
+    }
+}
+
+
 
 // ================== HELPER FUNCTIONS ==================
 
