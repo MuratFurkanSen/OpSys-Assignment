@@ -17,8 +17,6 @@
 /* ================== GLOBAL DATA ================== */
 int sample_count = 0;
 int feature_count = 0;
-int expanded_feature_count = 0;
-int target_col_index = -1;
 char *END_OF_LINE = "\r\n";
 
 /* ================== DATA STORAGE ================== */
@@ -63,10 +61,10 @@ int check_file_existence(void);
 void parse_csv_file(FILE *fp);
 
 int normalize_data();
-int fill_intercepsts_column(int norm_col_index);
-int normalize_numeric_column(int raw_col_index);
-int normalize_categorical_column(int raw_col_index);
-int normalize_target_column(int raw_col_index);
+void *fill_intercepsts_column(void *arg);
+void *normalize_numeric_column(void *arg);
+void *normalize_categorical_column(void *arg);
+void *normalize_target_column(void *arg);
 
 void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES], int rows, int cols);
 void compute_XTX(double A[][MAX_SAMPLES], double B[][MAX_FEATURES], double C[][MAX_FEATURES], int rowsA, int colsA, int colsB);
@@ -205,36 +203,53 @@ void parse_csv_file(FILE *fp) {
 }
 // ================== NORMALIZER FUNCTIONS ==================
 int normalize_data(){
-        // 2) Set intercept column as the first one
-    fill_intercepsts_column(0);
+    // A thread per (Intercept + features + target)
+    int total_thread_count = feature_count+1;
+
+    int thread_index = 0;
+    pthread_t threads[total_thread_count];
+    int thread_col_indexes[total_thread_count];
+
+    // Spawn intercept thread and fill intercept column as the first one
+    thread_col_indexes[thread_index] = 0;
+    pthread_create(&threads[thread_index], NULL, fill_intercepsts_column, &thread_col_indexes[thread_index]);
+    thread_index++;
 
     // 3) Normalize numeric columns (shifted by +1 in X_norm)
     for (int c = 0; c < feature_count; c++) {
-
+        thread_col_indexes[thread_index] = c;
         // Target Column
         if (c == feature_count -1){
-            normalize_target_column(c);
+            pthread_create(&threads[thread_index], NULL, normalize_target_column, &thread_col_indexes[thread_index]);
+            thread_index++;
             break;
         }
 
         // Feature Columns
         if (is_numeric[c] == 1){
-            normalize_numeric_column(c);
+            pthread_create(&threads[thread_index], NULL, normalize_numeric_column, &thread_col_indexes[thread_index]);
+            thread_index++;
         } else{
-            normalize_categorical_column(c);
+            pthread_create(&threads[thread_index], NULL, normalize_categorical_column, &thread_col_indexes[thread_index]);
+            thread_index++;
         }
     }
-    return 0;
-}
-
-int fill_intercepsts_column(int norm_col_index){
-    for (int r = 0; r < sample_count; r++) {
-        X_norm[r][norm_col_index] = 1;
+    // Wait for Threads to Finish
+    for (int i = 0; i < total_thread_count; i++) {
+        pthread_join(threads[i], NULL);
     }
     return 0;
 }
 
-int normalize_numeric_column(int raw_col_index){
+void *fill_intercepsts_column(void *arg){
+    int raw_col_index = *(int *)arg;
+    for (int r = 0; r < sample_count; r++) {
+        X_norm[r][raw_col_index] = 1;
+    }
+}
+
+void *normalize_numeric_column(void *arg){
+    int raw_col_index = *(int *)arg;
     int norm_col_index = raw_col_index + 1;
 
     double min = raw_numeric[0][raw_col_index];
@@ -258,10 +273,10 @@ int normalize_numeric_column(int raw_col_index){
     for (int r = 0; r < sample_count; r++) {
         X_norm[r][norm_col_index] = (raw_numeric[r][raw_col_index] - min) / range;
     }
-    return 0;
 }
 
-int normalize_categorical_column(int raw_col_index){
+void *normalize_categorical_column(void *arg){
+    int raw_col_index = *(int *)arg;
     int norm_col_index = raw_col_index + 1;
 
     if (strcasecmp(column_names[raw_col_index], "furnishingstatus") == 0){
@@ -291,10 +306,10 @@ int normalize_categorical_column(int raw_col_index){
             }
         }
     }
-    return 0;
 }
 
-int normalize_target_column(int raw_col_index){
+void *normalize_target_column(void *arg){
+    int raw_col_index = *(int *)arg;
     int norm_col_index = raw_col_index + 1;
 
     double min = raw_numeric[0][raw_col_index];
@@ -318,7 +333,6 @@ int normalize_target_column(int raw_col_index){
     for (int r = 0; r < sample_count; r++) {
         y_norm[r] = (raw_numeric[r][raw_col_index] - min) / range;
     }
-    return 0;
 }
 
 
