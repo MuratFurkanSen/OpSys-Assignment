@@ -44,6 +44,15 @@ double beta[MAX_FEATURES];
 
 double user_input[MAX_FEATURES];
 
+typedef struct {
+    int row;
+    int colsA;
+    int colsB;
+    double (*A)[MAX_SAMPLES];
+    double (*B)[MAX_FEATURES];
+    double (*C)[MAX_FEATURES];
+} matmul_thread_arg;
+
 
 /* ================== DATASETS ================== */
 #define DATASET_COUNT 3
@@ -67,7 +76,8 @@ void *normalize_categorical_column(void *arg);
 void *normalize_target_column(void *arg);
 
 void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES], int rows, int cols);
-void compute_XTX(double A[][MAX_SAMPLES], double B[][MAX_FEATURES], double C[][MAX_FEATURES], int rowsA, int colsA, int colsB);
+void compute_XTX_threaded(double A[][MAX_SAMPLES], double B[][MAX_FEATURES], double C[][MAX_FEATURES], int rowsA, int colsA, int colsB);
+void *compute_XTX_row(void *arg);
 void compute_XTY(double X_T[][MAX_SAMPLES], double y[MAX_SAMPLES], double XTY[MAX_FEATURES], int cols, int rows);
 int invert_matrix(double A[][MAX_FEATURES], double A_inv[][MAX_FEATURES], int n);
 void compute_beta(double XTX_inv[][MAX_FEATURES], double XTY[MAX_FEATURES], double beta[], int cols);
@@ -106,7 +116,7 @@ int main(void) {
     transpose_matrix(X_norm, X_norm_transpose, rows, cols);
 
     // 3) Multiply X_T * X
-    compute_XTX(X_norm_transpose, X_norm, XT_X_norm, cols, rows, cols);
+    compute_XTX_threaded(X_norm_transpose, X_norm, XT_X_norm, cols, rows, cols);
 
 
     compute_XTY(X_norm_transpose, y_norm, XT_y_norm, cols, rows);
@@ -345,15 +355,50 @@ void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES]
     }
 }
 
-void compute_XTX(double A[][MAX_SAMPLES], double B[][MAX_FEATURES], double C[][MAX_FEATURES], int rowsA, int colsA, int colsB) {
+void compute_XTX_threaded(
+    double A[][MAX_SAMPLES],
+    double B[][MAX_FEATURES],
+    double C[][MAX_FEATURES],
+    int rowsA,
+    int colsA,
+    int colsB
+) {
+    pthread_t threads[rowsA];
+    matmul_thread_arg args[rowsA];
+
     for (int i = 0; i < rowsA; i++) {
-        for (int j = 0; j < colsB; j++) {
-            C[i][j] = 0.0;
-            for (int k = 0; k < colsA; k++) {
-                C[i][j] += A[i][k] * B[k][j];
-            }
+        args[i].row = i;
+        args[i].colsA = colsA;
+        args[i].colsB = colsB;
+        args[i].A = A;
+        args[i].B = B;
+        args[i].C = C;
+
+        pthread_create(
+            &threads[i],
+            NULL,
+            compute_XTX_row,
+            &args[i]
+        );
+    }
+
+    for (int i = 0; i < rowsA; i++) {
+        pthread_join(threads[i], NULL);
+    }
+}
+
+void *compute_XTX_row(void *arg) {
+    matmul_thread_arg *data = (matmul_thread_arg *)arg;
+    int i = data->row;
+
+    for (int j = 0; j < data->colsB; j++) {
+        data->C[i][j] = 0.0;
+        for (int k = 0; k < data->colsA; k++) {
+            data->C[i][j] += data->A[i][k] * data->B[k][j];
         }
     }
+
+    return NULL;
 }
 
 void compute_XTY(double X_T[][MAX_SAMPLES], double y[MAX_SAMPLES], double XTY[MAX_FEATURES], int cols, int rows){
