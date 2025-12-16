@@ -113,7 +113,7 @@ void free_allocated_memory(void);
 
 int main(void) {
     client_fd = setup_server_and_accept();
-    send_to_client("WELCOME TO PRICE PREDICTION SERVER\n");
+    send_to_client("WELCOME TO PRICE PREDICTION SERVER\n\n");
 
     // Check all 3 CSV files exist
     if (check_file_existence() == -1) {
@@ -146,9 +146,8 @@ int main(void) {
     // 3) Normalize data (intercept + numeric + categorical + target)
     normalize_data();
 
-    send_to_client("[OK] All normalization threads completed.\n");
     send_to_client("Normalized feature matrix X_norm has been created.\n");
-    send_to_client("Normalized target vector vector y_norm has been created.\n");
+    send_to_client("Normalized target vector vector y_norm has been created.\n\n");
 
 
     int rows = sample_count;
@@ -162,7 +161,6 @@ int main(void) {
     compute_XTX_threaded(X_norm_transpose, X_norm, XT_X_norm, cols, rows, cols);
 
     compute_XTY_threaded(X_norm_transpose, y_norm, XT_y_norm, cols, rows);
-    send_to_client("All coefficient calculation threads joined.\n");
 
     // 3) Invert XTX
     send_to_client("Solving (XᵀX)β = Xᵀy ...\n");
@@ -175,24 +173,47 @@ int main(void) {
     compute_beta(XT_X_inverse, XT_y_norm, beta, cols);
     send_to_client("Training completed.\n");
 
-    send_to_client("FINAL MODEL (Normalized Form):\n");
+    send_to_client("FINAL MODEL (Normalized Form):\n\n");
     send_beta_equation_to_client();
-
-    // First one is intercept(bias)
-    user_input[0] = 1;
-    // Get the Rest of the Input
-    ask_user_parameters_client();
-    double prediction = predict();
     
-    char buffer[128];
 
-    // Normalized prediction
-    snprintf(buffer, sizeof(buffer), "Normalized Prediction Result %.4f\n", prediction);
-    send_to_client(buffer);
+    
+    while (1) {
+        send_to_client("\n");
+        send_to_client("You can now input feature values to get a price prediction.\n\n");
 
-    // Real prediction (denormalized)
-    snprintf(buffer, sizeof(buffer), "Real Prediction Result %.4f\n", denormalize_target(prediction));
-    send_to_client(buffer);
+        // First one is intercept(bias)
+        user_input[0] = 1;
+        // Get the Rest of the Input
+        ask_user_parameters_client();
+        double prediction = predict();
+        
+        send_to_client("\nPREDICTION RESULTS:\n");
+        char buffer[128];
+        // Normalized prediction
+        snprintf(buffer, sizeof(buffer), "Normalized Prediction Result %.4f\n", prediction);
+        send_to_client(buffer);
+
+        // Real prediction (denormalized)
+        snprintf(buffer, sizeof(buffer), "Real Prediction Result %.4f\n\n", denormalize_target(prediction));
+        send_to_client(buffer);
+
+        // Ask client if they want to repeat
+        char response[STRING_BUFFER_LIMIT];
+        send_to_client("Do you want to make another prediction? (yes/no):\n");
+        int n = recv(client_fd, response, sizeof(response) - 1, 0);
+        if (n <= 0) {
+            send_to_client("Error reading input. Exiting.\n");
+            break;
+        }
+        response[n] = '\0';
+        response[strcspn(response, END_OF_LINE)] = '\0';
+
+        if (strcasecmp(response, "yes") != 0) {
+            break;
+        }
+    }
+    close(client_fd);
     free_allocated_memory(); 
     return 0;
 }
@@ -303,6 +324,8 @@ int normalize_data(){
     for (int i = 0; i < total_thread_count; i++) {
         pthread_join(threads[i], NULL);
     }
+    send_to_client("\n");
+    send_to_client("[OK] All normalization threads completed.\n\n");
     return 0;
 }
 
@@ -487,6 +510,8 @@ void compute_XTX_threaded( double A[][MAX_SAMPLES], double B[][MAX_FEATURES],dou
     for (int i = 0; i < rowsA; i++) {
         pthread_join(threads[i], NULL);
     }
+    send_to_client("\n");
+    send_to_client("All coefficient calculation threads joined.\n\n");
 }
 
 void *compute_XTX_row(void *arg) {
@@ -792,11 +817,11 @@ void send_dataset_summary( const char *filename) {
 
     // Header
     snprintf(buffer, sizeof(buffer),
-             "[OK] File \"%s\" found.\n"
+             "\n[OK] File \"%s\" found.\n\n"
              "Reading file...\n"
              "%d rows loaded.\n"
              "%d columns detected.\n"
-             "Column analysis:\n",
+             "Column analysis:\n\n",
              filename, sample_count, feature_count);
     send_to_client(buffer);
 
@@ -825,7 +850,9 @@ void send_dataset_summary( const char *filename) {
             }
         }
         send_to_client(buffer);
+        
     }
+    send_to_client("\n");
 }
 
 void send_beta_equation_to_client() {
