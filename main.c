@@ -12,7 +12,10 @@
 #define PORT 60000
 #define MAX_SAMPLES 10000
 #define MAX_FEATURES 100
-#define STR_LEN 100
+#define STRING_BUFFER_LIMIT 100
+#define PREPROC_THREAD_LIMIT 128
+#define COEFF_THREAD_LIMIT 128
+
 
 /* ================== GLOBAL DATA ================== */
 int sample_count = 0;
@@ -20,7 +23,7 @@ int feature_count = 0;
 char *END_OF_LINE = "\r\n";
 
 /* ================== DATA STORAGE ================== */
-char line_buffer[MAX_FEATURES*STR_LEN];
+char line_buffer[MAX_FEATURES*STRING_BUFFER_LIMIT];
 char *column_names[MAX_FEATURES];
 char *raw_categorical[MAX_SAMPLES][MAX_FEATURES];
 double raw_numeric[MAX_SAMPLES][MAX_FEATURES];
@@ -476,7 +479,7 @@ void compute_beta(double XTX_inv[][MAX_FEATURES], double XTY[MAX_FEATURES], doub
 
 // ================== PREDICTION FUNCTIONS ==================
 void ask_user_parameters() {
-    char input[STR_LEN];
+    char input[STRING_BUFFER_LIMIT];
     
     
     for (int c = 0; c < feature_count - 1; c++) { // Exclude target
