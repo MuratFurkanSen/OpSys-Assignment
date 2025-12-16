@@ -100,6 +100,7 @@ double predict();
 double denormalize_target(double normalized_val);
 
 int is_double(const char *str);
+void free_allocated_memory(void);
 
 int main(void) {
     const char *filename = DATASETS[0];
@@ -151,7 +152,7 @@ int main(void) {
     
     printf("Normalized Prediction Result %.4f\n", prediction);
     printf("Real Prediction Result %.4f\n", denormalize_target(prediction));
-
+    free_allocated_memory(); 
     return 0;
 }
 
@@ -269,6 +270,7 @@ void *fill_intercepsts_column(void *arg){
     for (int r = 0; r < sample_count; r++) {
         X_norm[r][raw_col_index] = 1;
     }
+    return NULL;
 }
 
 void *normalize_numeric_column(void *arg){
@@ -296,6 +298,7 @@ void *normalize_numeric_column(void *arg){
     for (int r = 0; r < sample_count; r++) {
         X_norm[r][norm_col_index] = (raw_numeric[r][raw_col_index] - min) / range;
     }
+    return NULL;
 }
 
 void *normalize_categorical_column(void *arg){
@@ -329,6 +332,7 @@ void *normalize_categorical_column(void *arg){
             }
         }
     }
+    return NULL;
 }
 
 void *normalize_target_column(void *arg){
@@ -356,6 +360,7 @@ void *normalize_target_column(void *arg){
     for (int r = 0; r < sample_count; r++) {
         y_norm[r] = (raw_numeric[r][raw_col_index] - min) / range;
     }
+    return NULL;
 }
 
 
@@ -369,6 +374,11 @@ void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES]
 }
 
 void compute_XTX_threaded( double A[][MAX_SAMPLES], double B[][MAX_FEATURES],double C[][MAX_FEATURES], int rowsA, int colsA, int colsB) {
+    if (rowsA > COEFF_THREAD_LIMIT) {
+        fprintf(stderr, "Too many threads\n");
+        exit(1);
+    }
+
     pthread_t threads[rowsA];
     matmul_thread_arg args[rowsA];
 
@@ -601,4 +611,24 @@ int is_double(const char *str) {
     strtod(str, &endptr);
 
     return (*str != '\0' && *endptr == '\0');
+}
+
+void free_allocated_memory(void) {
+    // Free column names
+    for (int c = 0; c < feature_count; c++) {
+        if (column_names[c] != NULL) {
+            free(column_names[c]);
+            column_names[c] = NULL;
+        }
+    }
+
+    // Free categorical raw data
+    for (int r = 0; r < sample_count; r++) {
+        for (int c = 0; c < feature_count; c++) {
+            if (is_numeric[c] == 0 && raw_categorical[r][c] != NULL) {
+                free(raw_categorical[r][c]);
+                raw_categorical[r][c] = NULL;
+            }
+        }
+    }
 }
