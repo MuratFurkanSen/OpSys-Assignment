@@ -224,6 +224,7 @@ int normalize_data(){
             normalize_categorical_column(c);
         }
     }
+    return 0;
 }
 
 int fill_intercepsts_column(int norm_col_index){
