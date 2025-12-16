@@ -20,6 +20,7 @@
 /* ================== GLOBAL DATA ================== */
 int sample_count = 0;
 int feature_count = 0;
+int client_fd = -1;
 char *END_OF_LINE = "\r\n";
 
 /* ================== DATA STORAGE ================== */
@@ -47,6 +48,16 @@ double beta[MAX_FEATURES];
 
 double user_input[MAX_FEATURES];
 
+/* ================== DATASETS ================== */
+#define DATASET_COUNT 3
+
+const char *DATASETS[] = {
+    "Housing.csv",
+    "Student_Performance.csv",
+    "multiple_linear_regression_dataset.csv"
+};
+
+/* ================== THREAD ARGUMENT STRUCTS ================== */
 typedef struct {
     int row;
     int colsA;
@@ -66,14 +77,6 @@ typedef struct {
 
 
 
-/* ================== DATASETS ================== */
-#define DATASET_COUNT 3
-
-const char *DATASETS[] = {
-    "Housing.csv",
-    "Student_Performance.csv",
-    "multiple_linear_regression_dataset.csv"
-};
 
 
 
@@ -95,33 +98,58 @@ void *compute_XTY_element(void *arg);
 int invert_matrix(double A[][MAX_FEATURES], double A_inv[][MAX_FEATURES], int n);
 void compute_beta(double XTX_inv[][MAX_FEATURES], double XTY[MAX_FEATURES], double beta[], int cols);
 
-void ask_user_parameters();
+void ask_user_parameters_client();
 double predict();
 double denormalize_target(double normalized_val);
+
+int setup_server_and_accept(void);
+int ask_csv_filename_server(char *filename, size_t size);
+int send_to_client(const char *msg);
+void send_dataset_summary(const char *filename);
+void send_beta_equation_to_client();
 
 int is_double(const char *str);
 void free_allocated_memory(void);
 
 int main(void) {
-    const char *filename = DATASETS[0];
+    client_fd = setup_server_and_accept();
+    send_to_client("WELCOME TO PRICE PREDICTION SERVER\n");
 
-    // 1) Check file
+    // Check all 3 CSV files exist
     if (check_file_existence() == -1) {
-        printf("Error: One or more dataset files are missing!\n");
+        send_to_client("Error: One or more dataset files are missing!\n");
+        close(client_fd);
+        return EXIT_FAILURE;
+    }
+
+    // 1) Ask for CSV filename from client
+    char filename[STRING_BUFFER_LIMIT];
+
+    if (ask_csv_filename_server(filename, sizeof(filename)) != 0) {
+        send_to_client("Error receiving filename from client.\n");
+        close(client_fd);
         return EXIT_FAILURE;
     }
 
     // 2) Open file and parse CSV
     FILE *fp = fopen(filename, "r");
     if (!fp) {
-        perror(filename);
+        send_to_client("Error: Could not open specified file.\n");
+        close(client_fd);
         return EXIT_FAILURE;
     }
+
     parse_csv_file(fp);
     fclose(fp);
 
+    send_dataset_summary(filename);
     // 3) Normalize data (intercept + numeric + categorical + target)
     normalize_data();
+
+    send_to_client("[OK] All normalization threads completed.\n");
+    send_to_client("Normalized feature matrix X_norm has been created.\n");
+    send_to_client("Normalized target vector vector y_norm has been created.\n");
+
 
     int rows = sample_count;
     int cols = feature_count;
@@ -130,28 +158,41 @@ int main(void) {
     transpose_matrix(X_norm, X_norm_transpose, rows, cols);
 
     // 3) Multiply X_T * X
+    send_to_client("Spawning coefficient calculation threads...\n");
     compute_XTX_threaded(X_norm_transpose, X_norm, XT_X_norm, cols, rows, cols);
 
-
     compute_XTY_threaded(X_norm_transpose, y_norm, XT_y_norm, cols, rows);
+    send_to_client("All coefficient calculation threads joined.\n");
 
     // 3) Invert XTX
+    send_to_client("Solving (XᵀX)β = Xᵀy ...\n");
     if (invert_matrix(XT_X_norm, XT_X_inverse, cols) != 0) {
-        printf("Error: XTX is singular, cannot invert!\n");
+        send_to_client("Error: XTX is singular, cannot invert!\n");
         return -1;
     }
-
+    
     // Assuming XTX_inv and XTY are already computed
     compute_beta(XT_X_inverse, XT_y_norm, beta, cols);
+    send_to_client("Training completed.\n");
+
+    send_to_client("FINAL MODEL (Normalized Form):\n");
+    send_beta_equation_to_client();
 
     // First one is intercept(bias)
     user_input[0] = 1;
     // Get the Rest of the Input
-    ask_user_parameters();
+    ask_user_parameters_client();
     double prediction = predict();
     
-    printf("Normalized Prediction Result %.4f\n", prediction);
-    printf("Real Prediction Result %.4f\n", denormalize_target(prediction));
+    char buffer[128];
+
+    // Normalized prediction
+    snprintf(buffer, sizeof(buffer), "Normalized Prediction Result %.4f\n", prediction);
+    send_to_client(buffer);
+
+    // Real prediction (denormalized)
+    snprintf(buffer, sizeof(buffer), "Real Prediction Result %.4f\n", denormalize_target(prediction));
+    send_to_client(buffer);
     free_allocated_memory(); 
     return 0;
 }
@@ -298,12 +339,44 @@ void *normalize_numeric_column(void *arg){
     for (int r = 0; r < sample_count; r++) {
         X_norm[r][norm_col_index] = (raw_numeric[r][raw_col_index] - min) / range;
     }
+    /* ---- THREAD INFO TO CLIENT ---- */
+    
+    char buffer[256];
+    snprintf(buffer, sizeof(buffer),
+                "[Thread N%d] Normalizing %s... xmin=%.0f xmax=%.0f\n",
+                raw_col_index + 1,
+                column_names[raw_col_index],
+                min,
+                max);
+    send_to_client(buffer);
+    
+    /* ------------------------------------------------ */
     return NULL;
 }
 
 void *normalize_categorical_column(void *arg){
     int raw_col_index = *(int *)arg;
     int norm_col_index = raw_col_index + 1;
+    /* ---- THREAD INFO TO CLIENT ---- */
+
+    char buffer[256];
+
+    if (strcasecmp(column_names[raw_col_index], "furnishingstatus") == 0) {
+        snprintf(buffer, sizeof(buffer),
+                 "[Thread C%d] %s: furnished→2, semi-furnished→1, unfurnished→0\n",
+                 raw_col_index + 1,
+                 column_names[raw_col_index]);
+    } else {
+        snprintf(buffer, sizeof(buffer),
+                 "[Thread C%d] %s: yes/no → 1/0\n",
+                 raw_col_index + 1,
+                 column_names[raw_col_index]);
+    }
+
+    send_to_client(buffer);
+
+    /* ------------------------------------------------ */
+
 
     if (strcasecmp(column_names[raw_col_index], "furnishingstatus") == 0){
         for (int r = 0; r < sample_count; r++) {
@@ -360,6 +433,19 @@ void *normalize_target_column(void *arg){
     for (int r = 0; r < sample_count; r++) {
         y_norm[r] = (raw_numeric[r][raw_col_index] - min) / range;
     }
+
+    /* ---- THREAD INFO TO CLIENT (NO LOGIC CHANGE) ---- */
+    
+    char buffer[256];
+    snprintf(buffer, sizeof(buffer),
+                "[Thread N%d] Normalizing %s (TARGET)... ymin=%.0f ymax=%.0f\n",
+                raw_col_index + 1,
+                column_names[raw_col_index],
+                min,
+                max);
+    send_to_client(buffer);
+    
+    /* ------------------------------------------------ */
     return NULL;
 }
 
@@ -406,6 +492,24 @@ void compute_XTX_threaded( double A[][MAX_SAMPLES], double B[][MAX_FEATURES],dou
 void *compute_XTX_row(void *arg) {
     matmul_thread_arg *data = (matmul_thread_arg *)arg;
     int i = data->row;
+
+
+    /* ---- THREAD INFO TO CLIENT (ASSIGNMENT-COMPLIANT) ---- */
+    char buffer[256];
+
+    if (i == 0) {
+        snprintf(buffer, sizeof(buffer),
+                 "[β-Thread %d] Preparing data for β%d (intercept)...\n",
+                 i + 1, i);
+    } else {
+        snprintf(buffer, sizeof(buffer),
+                 "[β-Thread %d] Preparing data for β%d (%s)...\n",
+                 i + 1, i,
+                 column_names[i - 1]);
+    }
+
+    send_to_client(buffer);
+    /* ----------------------------------------------------- */
 
     for (int j = 0; j < data->colsB; j++) {
         data->C[i][j] = 0.0;
@@ -519,71 +623,65 @@ void compute_beta(double XTX_inv[][MAX_FEATURES], double XTY[MAX_FEATURES], doub
 }
 
 // ================== PREDICTION FUNCTIONS ==================
-void ask_user_parameters() {
-    char input[STRING_BUFFER_LIMIT];
-    
-    
+void ask_user_parameters_client() {
+    char buffer[STRING_BUFFER_LIMIT];
+
     for (int c = 0; c < feature_count - 1; c++) { // Exclude target
-        // 0 is Reserved for Intercept(Bias)
-        int norm_col_index = c+1;
+        int norm_col_index = c + 1;
+
         while (1) {
-            printf("Enter value for %s: ", column_names[c]);
-            if (!fgets(input, sizeof(input), stdin)) {
-                printf("Error reading input. Try again.\n");
+            // Send prompt to client
+            snprintf(buffer, sizeof(buffer), "Enter value for %s: ", column_names[c]);
+            send_to_client(buffer);
+
+            // Receive input from client
+            int n = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
+            if (n <= 0) {
+                send_to_client("Error reading input. Try again.\n");
                 continue;
             }
+            buffer[n] = '\0';
 
-            // Remove newline
-            input[strcspn(input, END_OF_LINE)] = '\0';
+            // Remove newline or carriage return
+            buffer[strcspn(buffer, "\r\n")] = '\0';
 
+            // Handle numeric input
             if (is_numeric[c] == 1) {
                 char *endptr;
-                double val = strtod(input, &endptr);
-                if (*endptr != '\0' || input[0] == '\0') {
-                    printf("Invalid numeric value. Please try again.\n");
+                double val = strtod(buffer, &endptr);
+                if (*endptr != '\0' || buffer[0] == '\0') {
+                    send_to_client("Invalid numeric value. Please try again.\n");
                     continue;
                 }
-                double range = X_norm_max[norm_col_index]- X_norm_min[norm_col_index];
-                if (range == 0){
-                    range = 1;
-                }
-                user_input[norm_col_index] = (val-X_norm_min[norm_col_index])/range;
-            } else {
-                if (strlen(input) == 0) {
-                    printf("Invalid categorical value. Please try again.\n");
+                double range = X_norm_max[norm_col_index] - X_norm_min[norm_col_index];
+                if (range == 0) range = 1;
+                user_input[norm_col_index] = (val - X_norm_min[norm_col_index]) / range;
+
+            } else { // Handle categorical input
+                if (strlen(buffer) == 0) {
+                    send_to_client("Invalid categorical value. Please try again.\n");
                     continue;
                 }
 
-                if (strcasecmp(column_names[c], "furnishingstatus") == 0){
-                    char *value = input;
+                if (strcasecmp(column_names[c], "furnishingstatus") == 0) {
+                    if (strcasecmp(buffer, "furnished") == 0) user_input[norm_col_index] = 2;
+                    else if (strcasecmp(buffer, "semi-furnished") == 0) user_input[norm_col_index] = 1;
+                    else if (strcasecmp(buffer, "unfurnished") == 0) user_input[norm_col_index] = 0;
+                    else user_input[norm_col_index] = -1;
 
-                    if (strcasecmp(value, "furnished") == 0) {
-                        user_input[norm_col_index]= 2;
-                    } else if (strcasecmp(value, "semi-furnished") == 0) {
-                        user_input[norm_col_index]= 1;
-                    } else if (strcasecmp(value, "unfurnished") == 0) {
-                        user_input[norm_col_index]= 0;
-                    } else { // Unknown Value
-                        user_input[norm_col_index]= -1;
-                    }
-                
-                } else{
-                    char *value = input;
+                } else {
+                    if (strcasecmp(buffer, "yes") == 0) user_input[norm_col_index] = 1;
+                    else if (strcasecmp(buffer, "no") == 0) user_input[norm_col_index] = 0;
+                    else user_input[norm_col_index] = -1;
+                }
 
-                    if (strcasecmp(value, "yes") == 0) {
-                        user_input[norm_col_index]= 1;
-                    } else if (strcasecmp(value, "no") == 0) {
-                        user_input[norm_col_index]= 0;
-                    } else { // Unknown Value
-                        user_input[norm_col_index]= -1;
-                    }
+                if (user_input[norm_col_index] == -1) {
+                    send_to_client("Invalid categorical value. Please try again.\n");
+                    continue;
                 }
-                if (user_input[norm_col_index] == -1){
-                    printf("Invalid categorical value. Please try again.\n");
-                    continue;   
-                }
-            }        
-            break; // Valid input, go to next feature
+            }
+
+            break; // valid input, move to next feature
         }
     }
 }
@@ -600,6 +698,149 @@ double denormalize_target(double normalized_val) {
     double range = y_norm_max - y_norm_min;
     if (range == 0) range = 1;  // avoid division by zero
     return normalized_val * range + y_norm_min;
+}
+
+// ================== SERVER FUNCTIONS ==================
+int setup_server_and_accept(void) {
+    int server_fd, client_fd;
+    struct sockaddr_in server_addr;
+    socklen_t addr_len = sizeof(server_addr);
+
+    // Create socket
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
+
+    // Allow quick reuse
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    // Setup address
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+
+    // Bind
+    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("bind");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Listen
+    if (listen(server_fd, 1) < 0) {
+        perror("listen");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server listening on port %d...\n", PORT);
+
+    // Accept client
+    client_fd = accept(server_fd, (struct sockaddr *)&server_addr, &addr_len);
+    if (client_fd < 0) {
+        perror("accept");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    return client_fd; // ready to send()
+}
+
+int ask_csv_filename_server(char *filename, size_t size) {
+    const char *prompt = "Enter CSV file name to load:\n";
+
+    // Send prompt
+    if (send(client_fd, prompt, strlen(prompt), 0) <= 0) {
+        return -1;
+    }
+
+    // Receive input
+    ssize_t bytes = recv(client_fd, filename, size - 1, 0);
+    if (bytes <= 0) {
+        return -1;
+    }
+
+    filename[bytes] = '\0';
+
+    // Strip \r\n
+    filename[strcspn(filename, "\r\n")] = '\0';
+
+    return 0;
+}
+
+int send_to_client(const char *msg) {
+    size_t len = strlen(msg);
+    ssize_t sent = 0;
+
+    while (sent < len) {
+        ssize_t n = send(client_fd, msg + sent, len - sent, 0);
+        if (n <= 0) {
+            return -1;  // error or client disconnected
+        }
+        sent += n;
+    }
+
+    return 0; // success
+}
+
+void send_dataset_summary( const char *filename) {
+    char buffer[1024];
+
+    // Header
+    snprintf(buffer, sizeof(buffer),
+             "[OK] File \"%s\" found.\n"
+             "Reading file...\n"
+             "%d rows loaded.\n"
+             "%d columns detected.\n"
+             "Column analysis:\n",
+             filename, sample_count, feature_count);
+    send_to_client(buffer);
+
+    // Column details
+    for (int c = 0; c < feature_count; c++) {
+        if (is_numeric[c]) {
+            if (c == feature_count - 1) {
+                // Target column
+                snprintf(buffer, sizeof(buffer),
+                         "%s : numeric (TARGET)\n",
+                         column_names[c]);
+            } else {
+                snprintf(buffer, sizeof(buffer),
+                         "%s : numeric\n",
+                         column_names[c]);
+            }
+        } else {
+            if (strcasecmp(column_names[c], "furnishingstatus") == 0) {
+                snprintf(buffer, sizeof(buffer),
+                         "%s : categorical (furnished, semi-furnished, unfurnished)\n",
+                         column_names[c]);
+            } else {
+                snprintf(buffer, sizeof(buffer),
+                         "%s : categorical (yes/no)\n",
+                         column_names[c]);
+            }
+        }
+        send_to_client(buffer);
+    }
+}
+
+void send_beta_equation_to_client() {
+    char buffer[512];
+
+    // Intercept
+    snprintf(buffer, sizeof(buffer), "price_norm = %.4f\n", beta[0]);
+    send_to_client(buffer);
+
+    // Rest of the features
+    for (int i = 1; i < feature_count; i++) {
+        // For formatting, prepend '+' for all except the first line handled above
+        snprintf(buffer, sizeof(buffer), "+ %.4f * %s\n", beta[i], column_names[i - 1]);
+        send_to_client(buffer);
+    }
 }
 
 // ================== HELPER FUNCTIONS ==================
