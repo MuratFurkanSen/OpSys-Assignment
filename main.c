@@ -56,6 +56,15 @@ typedef struct {
     double (*C)[MAX_FEATURES];
 } matmul_thread_arg;
 
+typedef struct {
+    int index;
+    int rows;
+    double (*X_T)[MAX_SAMPLES];
+    double *y;
+    double *XTY;
+} xty_thread_arg;
+
+
 
 /* ================== DATASETS ================== */
 #define DATASET_COUNT 3
@@ -81,7 +90,8 @@ void *normalize_target_column(void *arg);
 void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES], int rows, int cols);
 void compute_XTX_threaded(double A[][MAX_SAMPLES], double B[][MAX_FEATURES], double C[][MAX_FEATURES], int rowsA, int colsA, int colsB);
 void *compute_XTX_row(void *arg);
-void compute_XTY(double X_T[][MAX_SAMPLES], double y[MAX_SAMPLES], double XTY[MAX_FEATURES], int cols, int rows);
+void compute_XTY_threaded(double X_T[][MAX_SAMPLES], double y[MAX_SAMPLES], double XTY[MAX_FEATURES], int cols, int rows);
+void *compute_XTY_element(void *arg);
 int invert_matrix(double A[][MAX_FEATURES], double A_inv[][MAX_FEATURES], int n);
 void compute_beta(double XTX_inv[][MAX_FEATURES], double XTY[MAX_FEATURES], double beta[], int cols);
 
@@ -122,7 +132,7 @@ int main(void) {
     compute_XTX_threaded(X_norm_transpose, X_norm, XT_X_norm, cols, rows, cols);
 
 
-    compute_XTY(X_norm_transpose, y_norm, XT_y_norm, cols, rows);
+    compute_XTY_threaded(X_norm_transpose, y_norm, XT_y_norm, cols, rows);
 
     // 3) Invert XTX
     if (invert_matrix(XT_X_norm, XT_X_inverse, cols) != 0) {
@@ -358,14 +368,7 @@ void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES]
     }
 }
 
-void compute_XTX_threaded(
-    double A[][MAX_SAMPLES],
-    double B[][MAX_FEATURES],
-    double C[][MAX_FEATURES],
-    int rowsA,
-    int colsA,
-    int colsB
-) {
+void compute_XTX_threaded( double A[][MAX_SAMPLES], double B[][MAX_FEATURES],double C[][MAX_FEATURES], int rowsA, int colsA, int colsB) {
     pthread_t threads[rowsA];
     matmul_thread_arg args[rowsA];
 
@@ -404,14 +407,42 @@ void *compute_XTX_row(void *arg) {
     return NULL;
 }
 
-void compute_XTY(double X_T[][MAX_SAMPLES], double y[MAX_SAMPLES], double XTY[MAX_FEATURES], int cols, int rows){
+void compute_XTY_threaded( double X_T[][MAX_SAMPLES], double y[MAX_SAMPLES], double XTY[MAX_FEATURES], int cols, int rows) {
+    pthread_t threads[cols];
+    xty_thread_arg args[cols];
+
     for (int i = 0; i < cols; i++) {
-        XTY[i] = 0.0;
-        for (int j = 0; j < rows; j++) {
-            XTY[i] += X_T[i][j] * y[j];
-        }
+        args[i].index = i;
+        args[i].rows = rows;
+        args[i].X_T = X_T;
+        args[i].y = y;
+        args[i].XTY = XTY;
+
+        pthread_create(
+            &threads[i],
+            NULL,
+            compute_XTY_element,
+            &args[i]
+        );
+    }
+
+    for (int i = 0; i < cols; i++) {
+        pthread_join(threads[i], NULL);
     }
 }
+
+void *compute_XTY_element(void *arg) {
+    xty_thread_arg *data = (xty_thread_arg *)arg;
+    int i = data->index;
+
+    data->XTY[i] = 0.0;
+    for (int j = 0; j < data->rows; j++) {
+        data->XTY[i] += data->X_T[i][j] * data->y[j];
+    }
+
+    return NULL;
+}
+
 
 int invert_matrix(double A[][MAX_FEATURES], double A_inv[][MAX_FEATURES], int n) {
     // Initialize A_inv as identity matrix
