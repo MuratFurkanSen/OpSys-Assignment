@@ -32,16 +32,16 @@ double X_norm[MAX_SAMPLES][MAX_FEATURES];
 double X_norm_min[MAX_FEATURES];
 double X_norm_max[MAX_FEATURES];
 
-double y_norm[MAX_FEATURES];
+double y_norm[MAX_SAMPLES];
 double y_norm_min;
 double y_norm_max;
 
 double X_norm_transpose[MAX_FEATURES][MAX_SAMPLES];
 
-double XT_X_norm[MAX_SAMPLES][MAX_SAMPLES];
+double XT_X_norm[MAX_FEATURES][MAX_FEATURES];
 double XT_y_norm[MAX_FEATURES];
 
-double XT_X_inverse[MAX_SAMPLES][MAX_SAMPLES];
+double XT_X_inverse[MAX_FEATURES][MAX_FEATURES];
 double beta[MAX_FEATURES];
 
 double user_input[MAX_FEATURES];
@@ -69,10 +69,10 @@ int normalize_categorical_column(int raw_col_index);
 int normalize_target_column(int raw_col_index);
 
 void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES], int rows, int cols);
-void compute_XTX(double A[][MAX_SAMPLES], double B[][MAX_FEATURES], double C[][MAX_SAMPLES], int rowsA, int colsA, int colsB);
-void compute_XTY(double X_T[][MAX_SAMPLES], double y[], double XTY[], int cols, int rows);
-int invert_matrix(double A[][MAX_SAMPLES], double A_inv[][MAX_SAMPLES], int n);
-void compute_beta(double XTX_inv[][MAX_SAMPLES], double XTY[], double beta[], int cols);
+void compute_XTX(double A[][MAX_SAMPLES], double B[][MAX_FEATURES], double C[][MAX_FEATURES], int rowsA, int colsA, int colsB);
+void compute_XTY(double X_T[][MAX_SAMPLES], double y[MAX_SAMPLES], double XTY[MAX_FEATURES], int cols, int rows);
+int invert_matrix(double A[][MAX_FEATURES], double A_inv[][MAX_FEATURES], int n);
+void compute_beta(double XTX_inv[][MAX_FEATURES], double XTY[MAX_FEATURES], double beta[], int cols);
 
 void ask_user_parameters();
 double predict();
@@ -331,7 +331,7 @@ void transpose_matrix(double input[][MAX_FEATURES], double output[][MAX_SAMPLES]
     }
 }
 
-void compute_XTX(double A[][MAX_SAMPLES], double B[][MAX_FEATURES], double C[][MAX_SAMPLES], int rowsA, int colsA, int colsB) {
+void compute_XTX(double A[][MAX_SAMPLES], double B[][MAX_FEATURES], double C[][MAX_FEATURES], int rowsA, int colsA, int colsB) {
     for (int i = 0; i < rowsA; i++) {
         for (int j = 0; j < colsB; j++) {
             C[i][j] = 0.0;
@@ -342,7 +342,7 @@ void compute_XTX(double A[][MAX_SAMPLES], double B[][MAX_FEATURES], double C[][M
     }
 }
 
-void compute_XTY(double X_T[][MAX_SAMPLES], double y[], double XTY[], int cols, int rows) {
+void compute_XTY(double X_T[][MAX_SAMPLES], double y[MAX_SAMPLES], double XTY[MAX_FEATURES], int cols, int rows){
     for (int i = 0; i < cols; i++) {
         XTY[i] = 0.0;
         for (int j = 0; j < rows; j++) {
@@ -351,7 +351,7 @@ void compute_XTY(double X_T[][MAX_SAMPLES], double y[], double XTY[], int cols, 
     }
 }
 
-int invert_matrix(double A[][MAX_SAMPLES], double A_inv[][MAX_SAMPLES], int n) {
+int invert_matrix(double A[][MAX_FEATURES], double A_inv[][MAX_FEATURES], int n) {
     // Initialize A_inv as identity matrix
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
@@ -406,7 +406,7 @@ int invert_matrix(double A[][MAX_SAMPLES], double A_inv[][MAX_SAMPLES], int n) {
     return 0; // Success
 }
 
-void compute_beta(double XTX_inv[][MAX_SAMPLES], double XTY[], double beta[], int cols) {
+void compute_beta(double XTX_inv[][MAX_FEATURES], double XTY[MAX_FEATURES], double beta[], int cols) {
     for (int i = 0; i < cols; i++) {
         beta[i] = 0.0;
         for (int j = 0; j < cols; j++) {
