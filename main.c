@@ -102,7 +102,7 @@ double denormalize_target(double normalized_val);
 int is_double(const char *str);
 
 int main(void) {
-    const char *filename = DATASETS[2];
+    const char *filename = DATASETS[0];
 
     // 1) Check file
     if (check_file_existence() == -1) {
@@ -149,8 +149,8 @@ int main(void) {
     ask_user_parameters();
     double prediction = predict();
     
-    printf("Normalized Prediction Result %g\n", prediction);
-    printf("Normalized Prediction Result %g\n", denormalize_target(prediction));
+    printf("Normalized Prediction Result %.4f\n", prediction);
+    printf("Real Prediction Result %.4f\n", denormalize_target(prediction));
 
     return 0;
 }
