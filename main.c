@@ -213,6 +213,7 @@ int main(void) {
             break;
         }
     }
+    send_to_client("Thank you for using PRICE PREDICTION SERVER! Good Bye!\n\n");
     close(client_fd);
     free_allocated_memory(); 
     return 0;
