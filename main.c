@@ -115,14 +115,14 @@ int main(void) {
     client_fd = setup_server_and_accept();
     send_to_client("WELCOME TO PRICE PREDICTION SERVER\n\n");
 
-    // Check all 3 CSV files exist
+    // 1) Check all 3 CSV files exist
     if (check_file_existence() == -1) {
         send_to_client("Error: One or more dataset files are missing!\n");
         close(client_fd);
         return EXIT_FAILURE;
     }
 
-    // 1) Ask for CSV filename from client
+    // 2) Ask for CSV filename from client
     char filename[STRING_BUFFER_LIMIT];
 
     if (ask_csv_filename_server(filename, sizeof(filename)) != 0) {
@@ -131,7 +131,7 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
-    // 2) Open file and parse CSV
+    // 3) Open file and parse CSV
     FILE *fp = fopen(filename, "r");
     if (!fp) {
         send_to_client("Error: Could not open specified file.\n");
@@ -141,55 +141,64 @@ int main(void) {
 
     parse_csv_file(fp);
     fclose(fp);
-
+    // 5) Send dataset summary to client
     send_dataset_summary(filename);
-    // 3) Normalize data (intercept + numeric + categorical + target)
+
+    // 6) Normalize data (intercept + numeric + categorical + target)
     normalize_data();
 
+    // 7) Design MAtrix Creation Handled During Normalization
     send_to_client("Normalized feature matrix X_norm has been created.\n");
     send_to_client("Normalized target vector vector y_norm has been created.\n\n");
 
 
+    // For Matrix Operations
     int rows = sample_count;
     int cols = feature_count;
 
-    // 2) Transpose
+    // 8) Take Transpose of Design Matrix X
     transpose_matrix(X_norm, X_norm_transpose, rows, cols);
 
-    // 3) Multiply X_T * X
+    // 9) Multiply X_T * X
     send_to_client("Spawning coefficient calculation threads...\n");
     compute_XTX_threaded(X_norm_transpose, X_norm, XT_X_norm, cols, rows, cols);
 
+    // 10) Multiply X_T * y
     compute_XTY_threaded(X_norm_transpose, y_norm, XT_y_norm, cols, rows);
 
-    // 3) Invert XTX
+    // 11) Invert XT_X for Solving Beras
     send_to_client("Solving (XᵀX)β = Xᵀy ...\n");
     if (invert_matrix(XT_X_norm, XT_X_inverse, cols) != 0) {
         send_to_client("Error: XTX is singular, cannot invert!\n");
         return -1;
     }
     
-    // Assuming XTX_inv and XTY are already computed
+    // 12) Compute Beta Coefficients using β = (XᵀX)^(-1) * Xᵀy
     compute_beta(XT_X_inverse, XT_y_norm, beta, cols);
     send_to_client("Training completed.\n");
 
     send_to_client("FINAL MODEL (Normalized Form):\n\n");
+
+    // 13) Send Beta Equation to Client
     send_beta_equation_to_client();
     
-
-    
+    // Prediction Loop
     while (1) {
+        // Prompt for prediction
         send_to_client("\n");
         send_to_client("You can now input feature values to get a price prediction.\n\n");
 
         // First one is intercept(bias)
         user_input[0] = 1;
+
         // Get the Rest of the Input
         ask_user_parameters_client();
         double prediction = predict();
         
+        // Send Prediction Results to Client
         send_to_client("\nPREDICTION RESULTS:\n");
         char buffer[128];
+
         // Normalized prediction
         snprintf(buffer, sizeof(buffer), "Normalized Prediction Result %.4f\n", prediction);
         send_to_client(buffer);
@@ -202,6 +211,8 @@ int main(void) {
         char response[STRING_BUFFER_LIMIT];
         send_to_client("Do you want to make another prediction? (yes/no):\n");
         int n = recv(client_fd, response, sizeof(response) - 1, 0);
+
+        // Handle recv errors or disconnections
         if (n <= 0) {
             send_to_client("Error reading input. Exiting.\n");
             break;
@@ -209,11 +220,16 @@ int main(void) {
         response[n] = '\0';
         response[strcspn(response, END_OF_LINE)] = '\0';
 
+        // If Client Decides to Quit Break Loop
         if (strcasecmp(response, "yes") != 0) {
             break;
         }
     }
+
+    // Goodbye Message
     send_to_client("Thank you for using PRICE PREDICTION SERVER! Good Bye!\n\n");
+
+    // Cleanup
     close(client_fd);
     free_allocated_memory(); 
     return 0;
@@ -302,7 +318,7 @@ int normalize_data(){
     pthread_create(&threads[thread_index], NULL, fill_intercepsts_column, &thread_col_indexes[thread_index]);
     thread_index++;
 
-    // 3) Normalize numeric columns (shifted by +1 in X_norm)
+    // Normalize columns (shifted by +1 in X_norm)
     for (int c = 0; c < feature_count; c++) {
         thread_col_indexes[thread_index] = c;
         // Target Column
@@ -316,7 +332,7 @@ int normalize_data(){
         if (is_numeric[c] == 1){
             pthread_create(&threads[thread_index], NULL, normalize_numeric_column, &thread_col_indexes[thread_index]);
             thread_index++;
-        } else{
+        } else{ // Numeric Column
             pthread_create(&threads[thread_index], NULL, normalize_categorical_column, &thread_col_indexes[thread_index]);
             thread_index++;
         }
@@ -458,7 +474,7 @@ void *normalize_target_column(void *arg){
         y_norm[r] = (raw_numeric[r][raw_col_index] - min) / range;
     }
 
-    /* ---- THREAD INFO TO CLIENT (NO LOGIC CHANGE) ---- */
+    /* ---- THREAD INFO TO CLIENT ---- */
     
     char buffer[256];
     snprintf(buffer, sizeof(buffer),
@@ -520,7 +536,7 @@ void *compute_XTX_row(void *arg) {
     int i = data->row;
 
 
-    /* ---- THREAD INFO TO CLIENT (ASSIGNMENT-COMPLIANT) ---- */
+    /* ---- THREAD INFO TO CLIENT ---- */
     char buffer[256];
 
     if (i == 0) {
@@ -669,7 +685,7 @@ void ask_user_parameters_client() {
             buffer[n] = '\0';
 
             // Remove newline or carriage return
-            buffer[strcspn(buffer, "\r\n")] = '\0';
+            buffer[strcspn(buffer, END_OF_LINE)] = '\0';
 
             // Handle numeric input
             if (is_numeric[c] == 1) {
@@ -722,7 +738,9 @@ double predict() {
 
 double denormalize_target(double normalized_val) {
     double range = y_norm_max - y_norm_min;
-    if (range == 0) range = 1;  // avoid division by zero
+    if (range == 0){  // avoid division by zero
+        range = 1;
+    }  
     return normalized_val * range + y_norm_min;
 }
 
